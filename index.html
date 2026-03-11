@@ -5,18 +5,138 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1"></script>
     <style>
-        body { font-family: Arial, sans-serif; }
-        canvas { margin-bottom: 20px; }
-        #gazeCanvas { border: 1px solid black; display: block; }
+        /* basic page setup */
+        body {
+            font-family: Arial, sans-serif;
+            background: #f9f9f9;
+            margin: 0;
+            padding: 20px;
+            color: #333;
+            transition: background 0.3s, color 0.3s;
+        }
+
+        /* dark theme overrides */
+        body.dark {
+            background: #121212;
+            color: #ddd;
+        }
+        body.dark .chart-wrap,
+        body.dark .gaze-wrap {
+            background: #1e1e1e;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        }
+        body.dark #gazeCanvas {
+            border-color: #555;
+        }
+
+        /* container to center content */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h2 {
+            margin-top: 40px;
+            font-size: 1.5em;
+            color: #444;
+        }
+        body.dark h2 {
+            color: #ccc;
+        }
+
+        .chart-wrap,
+        .gaze-wrap {
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        canvas {
+            display: block;
+            max-width: 100%;
+            height: auto;
+            margin: 0 auto 20px;
+        }
+
+        #gazeCanvas {
+            border: 1px solid #ccc;
+        }
+
+        /* theme switch */
+        .theme-switch {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            display: flex;
+            align-items: center;
+            font-size: 0.9em;
+        }
+        .theme-switch input {
+            /* hide default checkbox */
+            opacity: 0;
+            width: 0;
+            height: 0;
+            position: absolute;
+        }
+        .theme-switch label {
+            position: relative;
+            cursor: pointer;
+            padding-left: 50px;
+            user-select: none;
+        }
+        .theme-switch label::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 40px;
+            height: 20px;
+            background: #ccc;
+            border-radius: 10px;
+            transition: background 0.3s;
+        }
+        .theme-switch label::after {
+            content: "";
+            position: absolute;
+            left: 2px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 16px;
+            height: 16px;
+            background: #fff;
+            border-radius: 50%;
+            transition: transform 0.3s;
+        }
+        .theme-switch input:checked + label::before {
+            background: #4caf50;
+        }
+        .theme-switch input:checked + label::after {
+            transform: translate(20px, -50%);
+        }
     </style>
 </head>
 <body>
 
-<h2>GSR + Unity Events</h2>
-<canvas id="chart" width="1000" height="400"></canvas>
+    <!-- dark mode toggle -->
+    <div class="theme-switch">
+        <input type="checkbox" id="darkToggle">
+        <label for="darkToggle">Dark mode</label>
+    </div>
 
-<h2>Eye Gaze Tracker</h2>
-<canvas id="gazeCanvas" width="500" height="300"></canvas>
+<div class="container">
+    <div class="chart-wrap">
+        <h2>GSR + Unity Events</h2>
+        <canvas id="chart" width="1000" height="400"></canvas>
+    </div>
+
+    <div class="gaze-wrap">
+        <h2>Eye Gaze Tracker</h2>
+        <canvas id="gazeCanvas" width="500" height="300"></canvas>
+    </div>
+</div>
 
 <script>
 const ctx = document.getElementById('chart');
@@ -135,6 +255,30 @@ ws.onmessage = (msg) => {
 
 // Optional periodic chart window update
 setInterval(updateChartWindow, 200);
+
+// ----- dark mode toggle logic -----
+const darkToggle = document.getElementById('darkToggle');
+
+function updateTheme(checked) {
+    document.body.classList.toggle('dark', checked);
+    localStorage.setItem('darkMode', checked ? '1' : '0');
+}
+
+// initialize from preference (default dark)
+let saved = localStorage.getItem('darkMode');
+if (saved === null) {
+    // no preference stored yet -> default to dark
+    saved = '1';
+    localStorage.setItem('darkMode', '1');
+}
+if (saved === '1') {
+    darkToggle.checked = true;
+    updateTheme(true);
+}
+
+darkToggle.addEventListener('change', () => {
+    updateTheme(darkToggle.checked);
+});
 
 </script>
 </body>
