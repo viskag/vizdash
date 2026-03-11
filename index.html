@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Realtime Bio + Gaze Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1"></script>
+    <style>
+        body { font-family: Arial, sans-serif; }
+        canvas { margin-bottom: 20px; }
+        #gazeCanvas { border: 1px solid black; display: block; }
+    </style>
+</head>
+<body>
+
+<h2>GSR + Unity Events</h2>
+<canvas id="chart" width="1000" height="400"></canvas>
+
+<h2>Eye Gaze Tracker</h2>
+<canvas id="gazeCanvas" width="500" height="300"></canvas>
+
+<script>
+const ctx = document.getElementById('chart');
+const gazeCanvas = document.getElementById('gazeCanvas');
+const gctx = gazeCanvas.getContext('2d');
+
+// ----- Chart.js setup for GSR -----
+const chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+        datasets: [{
+            label: "GSR Conductance",
+            data: [],
+            borderWidth: 2,
+            pointRadius: 0,
+            borderColor: 'blue'
+        }]
+    },
+    options: {
+        animation: false,
+        parsing: false,
+        scales: { x: { type: 'linear' } },
+        plugins: {
+            annotation: { annotations: {} }
+        }
+    }
+});
+
+const windowSize = 60; // seconds
+const maxPoints = 3600;
+
+// ----- Gaze helper -----
+function drawGaze(x, y) {
+    gctx.clearRect(0, 0, gazeCanvas.width, gazeCanvas.height);
+    gctx.beginPath();
+    gctx.arc(x * gazeCanvas.width, y * gazeCanvas.height, 5, 0, Math.PI*2);
+    gctx.fillStyle = "red";
+    gctx.fill();
+}
+
+// ----- Slide chart window -----
+function updateChartWindow() {
+    if (chart.data.datasets[0].data.length === 0) return;
+
+    const now = chart.data.datasets[0].data[chart.data.datasets[0].data.length-1].x;
+
+    chart.options.scales.x.min = now - windowSize;
+    chart.options.scales.x.max = now;
+
+    // Remove old event annotations
+    for (let id in chart.options.plugins.annotation.annotations) {
+        const ann = chart.options.plugins.annotation.annotations[id];
+        if (ann.xMin < chart.options.scales.x.min) {
+            delete chart.options.plugins.annotation.annotations[id];
+        }
+    }
+
+    chart.update('none');
+}
+
+// ----- WebSocket to Python hub -----
+const ws = new WebSocket("ws://localhost:9100");
+
+ws.onopen = () => console.log("Connected to Python hub");
+ws.onclose = () => console.log("Disconnected from hub");
+ws.onerror = (e) => console.error("WebSocket error", e);
+
+ws.onmessage = (msg) => {
+    const p = JSON.parse(msg.data);
+
+    console.log("Received packet:", p); //log every incoming packet
+
+    // GSR biosignal
+    if (p.type === "biosignal") {
+        console.log("GSR packet:", p.data);
+        chart.data.datasets[0].data.push({ x: p.data.ts, y: p.data.gsr });
+        if (chart.data.datasets[0].data.length > maxPoints) chart.data.datasets[0].data.shift();
+    }
+
+    // Unity event
+    if (p.type === "unity_event") {
+        console.log("Unity event packet:", p.data);
+        const id = "evt_" + Math.random();
+        const x = p.data.t;
+        const label = p.data.label || "Unity Event";
+
+        chart.options.plugins.annotation.annotations[id] = {
+            type: 'line',
+            xMin: x,
+            xMax: x,
+            borderColor: 'black',
+            borderWidth: 2,
+            label: {
+                display: true,
+                content: label,
+                rotation: -90,
+                position: 'start'
+            }
+        };
+    }
+
+    // Tobii gaze
+    if (p.type === "gaze") {
+        console.log("Gaze packet:", p.data);
+        const left = p.data.left;
+        if (left && !isNaN(left.x) && !isNaN(left.y)) {
+            console.log(`Drawing gaze at x=${left.x}, y=${left.y}`);
+            drawGaze(left.x, left.y);
+        } else {
+            console.warn("Invalid gaze coordinates:", left);
+        }
+    }
+
+    updateChartWindow();
+};
+
+// Optional periodic chart window update
+setInterval(updateChartWindow, 200);
+
+</script>
+</body>
+</html>
