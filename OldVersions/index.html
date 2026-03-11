@@ -1,0 +1,299 @@
+<!-- <!DOCTYPE html>
+<html>
+<head>
+    <title>Bio + Gameplay Live</title>
+</head>
+<body>
+
+<h2>Live Stream</h2>
+<pre id="log"></pre>
+
+<script>
+const log = document.getElementById("log");
+
+const ws = new WebSocket("ws://localhost:9100");
+
+ws.onopen = () => {
+    ws.send(JSON.stringify({ type: "dashboard" }));
+};
+
+ws.onmessage = (msg) => {
+    const data = JSON.parse(msg.data);
+    log.textContent += JSON.stringify(data, null, 2) + "\n\n";
+};
+</script>
+
+</body>
+</html> -->
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!-- 
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Biometric + Gameplay Timeline</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background:#111; color:#eee; font-family:Arial; padding:20px; }
+        canvas { background:#222; }
+    </style>
+</head>
+<body>
+
+<h2>Biometric Timeline</h2>
+<canvas id="chart" width="900" height="400"></canvas>
+
+<script>
+// WebSocket connection
+const ws = new WebSocket("ws://localhost:9100");
+
+// Chart context
+const ctx = document.getElementById("chart").getContext("2d");
+
+// Data arrays
+let timeLabels = [];
+let biometricData = [];
+let eventMarkers = [];
+
+// Sliding window size in seconds
+const windowSize = 60;
+
+// Simulated biometric signal (replace with real data later)
+function generateBiometricValue() {
+    return 60 + Math.sin(Date.now()/1000)*10 + Math.random()*3;
+}
+
+// Create chart
+const chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+        labels: timeLabels,
+        datasets: [{
+            label: 'Biometric',
+            data: biometricData,
+            borderColor: 'cyan',
+            tension: 0.3,
+            pointRadius: 0
+        }]
+    },
+    options: {
+        animation: false,
+        scales: {
+            x: {
+                type: 'linear',   // Use actual seconds for X-axis
+                title: { display:true, text:'Time (s)' },
+                min: 0,
+                max: windowSize
+            },
+            y: {
+                title: { display:true, text:'Biometric Value' }
+            }
+        },
+        plugins: {
+            legend: { display:true }
+        }
+    },
+    plugins: [{
+        id: 'eventLines',
+        afterDraw(chart) {
+            const {ctx, chartArea: {top, bottom}, scales: {x}} = chart;
+
+            // Remove old event markers
+            eventMarkers = eventMarkers.filter(event => event.time >= x.min);
+
+            // Draw vertical event markers
+            eventMarkers.forEach(event => {
+                const xPos = x.getPixelForValue(event.time);
+                ctx.save();
+                ctx.strokeStyle = "red";
+                ctx.beginPath();
+                ctx.moveTo(xPos, top);
+                ctx.lineTo(xPos, bottom);
+                ctx.stroke();
+
+                ctx.fillStyle = "red";
+                ctx.fillText(event.label, xPos + 4, top + 12);
+                ctx.restore();
+            });
+        }
+    }]
+});
+
+// Update loop every 200ms
+setInterval(() => {
+    const now = Date.now() / 1000; // current dashboard time in seconds
+
+    // Add new biometric value
+    biometricData.push(generateBiometricValue());
+    timeLabels.push(now);
+
+    // Remove old points outside sliding window
+    while(timeLabels.length > 0 && timeLabels[0] < now - windowSize) {
+        timeLabels.shift();
+        biometricData.shift();
+    }
+
+    // Adjust X-axis range to sliding window
+    chart.options.scales.x.min = now - windowSize;
+    chart.options.scales.x.max = now;
+
+    // Remove old event markers (again for safety)
+    eventMarkers = eventMarkers.filter(event => event.time >= now - windowSize);
+
+    chart.update();
+}, 200);
+
+// WebSocket handlers
+ws.onopen = () => ws.send(JSON.stringify({ type: "dashboard" }));
+
+ws.onmessage = (msg) => {
+    const packet = JSON.parse(msg.data);
+
+    if(packet.type === "unity_event") {
+        // Use dashboard receive time for marker
+        const now = Date.now() / 1000;
+        eventMarkers.push({
+            time: now,
+            label: packet.data.verb
+        });
+    }
+};
+</script>
+
+</body>
+</html> -->
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+<!DOCTYPE html>
+<html>
+<head>
+<title>Realtime Bio Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1"></script>
+</head>
+<body>
+<h2>gsrtest</h2>
+<canvas id="chart" width="1000" height="400"></canvas>
+<script>
+const ctx = document.getElementById('chart');
+
+const chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+        datasets: [{
+            label: "GSR Conductance",
+            data: [],
+            borderWidth: 2,
+            pointRadius: 0,
+        }]
+    },
+    options: {
+        animation: false,
+        parsing: false,
+        scales: {
+            x: { type: 'linear' }
+        },
+        plugins: {
+            annotation: {
+                annotations: {}
+            }
+        }
+    }
+});
+const ws = new WebSocket("ws://localhost:9100");
+
+const windowSize = 60; // seconds
+const maxPoints = 3600; // optional max points
+
+function updateChartWindow() {
+    if (chart.data.datasets[0].data.length === 0) return;
+
+    const now = chart.data.datasets[0].data[chart.data.datasets[0].data.length-1].x;
+
+    // Slide X-axis window
+    chart.options.scales.x.min = now - windowSize;
+    chart.options.scales.x.max = now;
+
+    // Remove old event markers
+    for (let id in chart.options.plugins.annotation.annotations) {
+        const ann = chart.options.plugins.annotation.annotations[id];
+        if (ann.xMin < chart.options.scales.x.min) {
+            delete chart.options.plugins.annotation.annotations[id];
+        }
+    }
+
+    chart.update('none');
+}
+
+// WebSocket message handler
+ws.onmessage = (msg) => {
+    const p = JSON.parse(msg.data);
+
+    if (p.type === "biosignal") {
+        chart.data.datasets[0].data.push({ x: p.data.ts, y: p.data.gsr });
+        if (chart.data.datasets[0].data.length > maxPoints) chart.data.datasets[0].data.shift();
+    }
+
+    if (p.type === "unity_event") {
+        const id = "evt_" + Math.random();
+        console.log("Unity event received:", p.data);
+
+        const x = p.data.t;
+        const label = p.data.label || "Unity Event";
+
+        chart.options.plugins.annotation.annotations[id] = {
+            type: 'line',
+            xMin: x,
+            xMax: x,
+            borderColor: 'black',
+            borderWidth: 2,
+            label: {
+                display: true,
+                content: label,
+                rotation: -90,
+                position: 'start'
+            }
+        };
+    }
+
+    updateChartWindow();
+};
+
+// Optional: run periodically too if you want smoother sliding
+setInterval(updateChartWindow, 200);
+</script>
+
+</body>
+</html>
