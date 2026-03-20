@@ -1,0 +1,809 @@
+<!-- <!DOCTYPE html>
+<html>
+<head>
+    <title>Realtime Bio + Gaze Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1"></script>
+    <style>
+        /* basic page setup */
+        body {
+            font-family: Arial, sans-serif;
+            background: #f9f9f9;
+            margin: 0;
+            padding: 20px;
+            color: #333;
+            transition: background 0.3s, color 0.3s;
+        }
+
+        /* dark theme overrides */
+        body.dark {
+            background: #121212;
+            color: #ddd;
+        }
+        body.dark .chart-wrap,
+        body.dark .gaze-wrap {
+            background: #1e1e1e;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        }
+        body.dark #gazeCanvas {
+            border-color: #555;
+        }
+
+        /* container to center content */
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        h2 {
+            margin-top: 40px;
+            font-size: 1.5em;
+            color: #444;
+        }
+        body.dark h2 {
+            color: #ccc;
+        }
+
+        .chart-wrap,
+        .gaze-wrap {
+            background: #fff;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin-bottom: 20px;
+        }
+
+        canvas {
+            display: block;
+            max-width: 100%;
+            height: auto;
+            margin: 0 auto 20px;
+        }
+
+        #gazeCanvas {
+            border: 1px solid #ccc;
+        }
+
+        /* theme switch */
+        .theme-switch {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            display: flex;
+            align-items: center;
+            font-size: 0.9em;
+        }
+        .theme-switch input {
+            /* hide default checkbox */
+            opacity: 0;
+            width: 0;
+            height: 0;
+            position: absolute;
+        }
+        .theme-switch label {
+            position: relative;
+            cursor: pointer;
+            padding-left: 50px;
+            user-select: none;
+        }
+        .theme-switch label::before {
+            content: "";
+            position: absolute;
+            left: 0;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 40px;
+            height: 20px;
+            background: #ccc;
+            border-radius: 10px;
+            transition: background 0.3s;
+        }
+        .theme-switch label::after {
+            content: "";
+            position: absolute;
+            left: 2px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 16px;
+            height: 16px;
+            background: #fff;
+            border-radius: 50%;
+            transition: transform 0.3s;
+        }
+        .theme-switch input:checked + label::before {
+            background: #4caf50;
+        }
+        .theme-switch input:checked + label::after {
+            transform: translate(20px, -50%);
+        }
+    </style>
+</head>
+<body>
+
+
+    <div class="theme-switch">
+        <input type="checkbox" id="darkToggle">
+        <label for="darkToggle">Dark mode</label>
+    </div>
+
+<div class="container">
+    <div class="chart-wrap">
+        <h2>GSR + Unity Events</h2>
+        <canvas id="chart" width="1000" height="400"></canvas>
+    </div>
+
+    <div class="gaze-wrap">
+        <h2>Eye Gaze Tracker</h2>
+        <canvas id="gazeCanvas" width="500" height="300"></canvas>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const ctx = document.getElementById('chart');
+    const gazeCanvas = document.getElementById('gazeCanvas');
+    const gctx = gazeCanvas.getContext('2d');
+
+    // ----- Smoothing for gaze -----
+    let smoothX = 0.5, smoothY = 0.5;
+    const smoothingFactor = 0.3;
+
+    // ----- Trail effect -----
+    const trailLength = 15;
+    let trailPositions = [];
+    for (let i = 0; i < trailLength; i++) {
+        trailPositions.push({ x: smoothX, y: smoothY });
+    }
+
+    // ----- Chart.js setup for GSR + HR -----
+    const chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            datasets: [
+                {
+                    label: "GSR Conductance",
+                    data: [],
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    borderColor: 'blue',
+                    yAxisID: 'y'               // uses left y-axis
+                },
+                {
+                    label: "Heart Rate (BPM)",
+                    data: [],
+                    borderWidth: 2,
+                    pointRadius: 0,
+                    borderColor: 'red',
+                    yAxisID: 'y'                // also uses left y-axis
+                }
+            ]
+        },
+        options: {
+            animation: false,
+            parsing: false,
+            scales: {
+                x: {
+                    type: 'linear',
+                    ticks: {
+                        callback: function(value) {
+                            const d = new Date(value * 1000);
+                            return d.toLocaleTimeString();
+                        }
+                    }
+                },
+                y: {
+                    beginAtZero: true,           // optional: you can remove if HR > 0 always
+                }
+            },
+            plugins: {
+                annotation: { annotations: {} }
+            }
+        }
+    });
+
+    const windowSize = 60; // seconds
+    const maxPoints = 3600;
+
+    function updateChartWindow() {
+        if (chart.data.datasets[0].data.length === 0) return;
+        const now = chart.data.datasets[0].data[chart.data.datasets[0].data.length - 1].x;
+        chart.options.scales.x.min = now - windowSize;
+        chart.options.scales.x.max = now;
+        for (let id in chart.options.plugins.annotation.annotations) {
+            const ann = chart.options.plugins.annotation.annotations[id];
+            if (ann.xMin < chart.options.scales.x.min) {
+                delete chart.options.plugins.annotation.annotations[id];
+            }
+        }
+        chart.update('none');
+    }
+
+    // ----- Continuous drawing loop (with trail) -----
+    function drawLoop() {
+        gctx.clearRect(0, 0, gazeCanvas.width, gazeCanvas.height);
+        for (let i = 0; i < trailPositions.length; i++) {
+            const age = i;
+            const opacity = 0.6 * (1 - age / trailLength) + 0.1;
+            const pos = trailPositions[i];
+            gctx.beginPath();
+            gctx.arc(pos.x * gazeCanvas.width, pos.y * gazeCanvas.height, 5, 0, Math.PI * 2);
+            gctx.fillStyle = `rgba(255, 0, 0, ${opacity})`;
+            gctx.fill();
+        }
+        gctx.beginPath();
+        gctx.arc(smoothX * gazeCanvas.width, smoothY * gazeCanvas.height, 10, 0, Math.PI * 2);
+        gctx.fillStyle = "rgba(255, 0, 0, 0.9)";
+        gctx.fill();
+        requestAnimationFrame(drawLoop);
+    }
+    drawLoop();
+
+    // ----- WebSocket to Python hub -----
+    const ws = new WebSocket("ws://localhost:9100");
+
+    ws.onopen = () => console.log("Connected to Python hub");
+    ws.onclose = () => console.log("Disconnected from hub");
+    ws.onerror = (e) => console.error("WebSocket error", e);
+
+    ws.onmessage = (msg) => {
+        const p = JSON.parse(msg.data);
+        console.log("Received packet:", p);
+
+        // GSR + HR biosignal
+        if (p.type === "biosignal") {
+            const ts = p.data.ts;
+            const gsr = p.data.gsr;
+            const hr = p.data.hr;   // <-- add this line
+
+            // Push GSR
+            chart.data.datasets[0].data.push({ x: ts, y: gsr });
+            // Push HR (if present)
+            if (hr !== undefined && !isNaN(hr)) {
+                chart.data.datasets[1].data.push({ x: ts, y: hr });
+            } else {
+                // If HR missing, push null to keep arrays aligned (optional)
+                chart.data.datasets[1].data.push({ x: ts, y: null });
+            }
+
+            // Trim old data
+            if (chart.data.datasets[0].data.length > maxPoints) {
+                chart.data.datasets[0].data.shift();
+                chart.data.datasets[1].data.shift();
+            }
+        }
+
+        // Unity event
+        if (p.type === "unity_event") {
+            const id = "evt_" + Math.random();
+            const x = p.data.t;
+            const label = p.data.label || "Unity Event";
+            chart.options.plugins.annotation.annotations[id] = {
+                type: 'line',
+                xMin: x,
+                xMax: x,
+                borderColor: 'black',
+                borderWidth: 2,
+                label: {
+                    display: true,
+                    content: label,
+                    rotation: -90,
+                    position: 'start'
+                }
+            };
+        }
+
+        // Tobii gaze
+        if (p.type === "gaze") {
+            const left = p.data.left;
+            if (left && !isNaN(left.x) && !isNaN(left.y)) {
+                smoothX = smoothX * (1 - smoothingFactor) + left.x * smoothingFactor;
+                smoothY = smoothY * (1 - smoothingFactor) + left.y * smoothingFactor;
+                trailPositions.unshift({ x: smoothX, y: smoothY });
+                if (trailPositions.length > trailLength) trailPositions.pop();
+            } else {
+                console.warn("Invalid gaze coordinates:", left);
+            }
+        }
+
+        updateChartWindow();
+    };
+
+    setInterval(updateChartWindow, 200);
+
+    // ----- dark mode toggle logic -----
+    const darkToggle = document.getElementById('darkToggle');
+
+    function updateTheme(checked) {
+        document.body.classList.toggle('dark', checked);
+        localStorage.setItem('darkMode', checked ? '1' : '0');
+    }
+
+    let saved = localStorage.getItem('darkMode');
+    if (saved === null) {
+        saved = '1';
+        localStorage.setItem('darkMode', '1');
+    }
+    if (saved === '1') {
+        darkToggle.checked = true;
+        updateTheme(true);
+    }
+
+    darkToggle.addEventListener('change', () => {
+        updateTheme(darkToggle.checked);
+    });
+});
+</script>
+
+</body>
+</html> -->
+
+
+
+
+
+
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Realtime Bio + Gaze Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-annotation@3.0.1"></script>
+    
+    <style> 
+        /* basic page setup */
+body {
+    font-family: Arial, sans-serif;
+    background: #f9f9f9;
+    margin: 0;
+    padding: 20px;
+    color: #333;
+    transition: background 0.3s, color 0.3s;
+}
+
+/* dark theme overrides */
+body.dark {
+    background: #121212;
+    color: #ddd;
+}
+body.dark .chart-wrap,
+body.dark .gaze-wrap {
+    background: #1e1e1e;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.5);
+}
+body.dark #gazeCanvas {
+    border-color: #555;
+}
+
+/* container to center content */
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+}
+
+/* layout: top row for HR + gaze, bottom row for GSR */
+.top-row {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    align-items: stretch;
+}
+.heart-wrap,
+.gaze-wrap {
+    flex: 1;
+    min-width: 300px;
+    display: flex;
+    flex-direction: column;
+}
+.bottom-row {
+    margin-top: 20px;
+}
+.gsr-wrap {
+    width: 100%;
+}
+
+/* chart and gaze wrappers */
+.chart-wrap,
+.gaze-wrap {
+    background: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+/* gaze-wrap already flexed above (repeated for clarity) */
+.gaze-wrap {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+}
+
+/* make chart canvases expand to fill their wrappers */
+.heart-wrap canvas,
+.gsr-wrap canvas {
+    width: 100%;
+    height: 100%;
+    display: block;
+    flex: 1;
+}
+
+/* keep hr container tall enough to match gaze area */
+.heart-wrap {
+    flex: 1;
+}
+
+
+/* heading inside wrappers */
+h2 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    font-size: 1.3em;
+    color: #444;
+}
+body.dark h2 {
+    color: #ccc;
+}
+
+/* canvas container that enforces a landscape aspect ratio */
+    .canvas-container {
+        position: relative;
+        width: 100%;
+        /* preserve a widescreen layout regardless of column height */
+        aspect-ratio: 16 / 9;    /* modern browsers will keep this ratio */
+        /* fall back for older browsers: limit height so it stays wide */
+        max-height: 70vh;        /* never taller than viewport, keeps it landscape */
+    }
+
+    /* the canvas itself */
+    #gazeCanvas {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        border: 1px solid #ccc;
+        background: #000;        /* optional, shows empty areas */
+        object-fit: contain;     /* keeps inherent aspect ratio intact */
+}
+
+/* theme switch (unchanged) */
+.theme-switch {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    display: flex;
+    align-items: center;
+    font-size: 0.9em;
+}
+.theme-switch input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+    position: absolute;
+}
+.theme-switch label {
+    position: relative;
+    cursor: pointer;
+    padding-left: 50px;
+    user-select: none;
+}
+.theme-switch label::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 40px;
+    height: 20px;
+    background: #ccc;
+    border-radius: 10px;
+    transition: background 0.3s;
+}
+.theme-switch label::after {
+    content: "";
+    position: absolute;
+    left: 2px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 16px;
+    height: 16px;
+    background: #fff;
+    border-radius: 50%;
+    transition: transform 0.3s;
+}
+.theme-switch input:checked + label::before {
+    background: #4caf50;
+}
+.theme-switch input:checked + label::after {
+    transform: translate(20px, -50%);
+}
+    </style>
+
+</head>
+<body>
+
+    <!-- dark mode toggle -->
+    <div class="theme-switch">
+        <input type="checkbox" id="darkToggle">
+        <label for="darkToggle">Dark mode</label>
+    </div>
+
+<div class="container">
+    <div class="top-row">
+        <!-- Heart rate alongside gaze -->
+        <div class="heart-wrap chart-wrap">
+            <h2>Heart Rate (BPM)</h2>
+            <canvas id="hrChart"></canvas>
+        </div>
+        <div class="gaze-wrap">
+            <h2>Eye Gaze Tracker</h2>
+            <div class="canvas-container">
+                <canvas id="gazeCanvas" width="500" height="300"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="bottom-row">
+        <div class="gsr-wrap chart-wrap">
+            <h2>GSR Conductance</h2>
+            <canvas id="gsrChart"></canvas>
+        </div>
+    </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // ----- GSR Chart -----
+    const gsrCtx = document.getElementById('gsrChart').getContext('2d');
+    const gsrChart = new Chart(gsrCtx, {
+        type: 'line',
+        data: {
+            datasets: [{
+                label: "GSR Conductance",
+                data: [],
+                borderWidth: 2,
+                pointRadius: 0,
+                borderColor: 'blue'
+            }]
+        },
+        options: {
+            animation: false,
+            parsing: false,
+            scales: {
+                x: {
+                    type: 'linear',
+                    ticks: {
+                        callback: function(value) {
+                            const d = new Date(value * 1000);
+                            return d.toLocaleTimeString();
+                        }
+                    }
+                },
+                y: {
+                    beginAtZero: true,
+                    title: { display: true, text: 'µS' }
+                }
+            },
+            plugins: {
+                annotation: { annotations: {} }
+            }
+        }
+    });
+
+    // ----- Heart Rate Chart -----
+    const hrCtx = document.getElementById('hrChart').getContext('2d');
+    const hrChart = new Chart(hrCtx, {
+        type: 'line',
+        data: {
+            datasets: [{
+                label: "Heart Rate (BPM)",
+                data: [],
+                borderWidth: 2,
+                pointRadius: 0,
+                borderColor: 'red'
+            }]
+        },
+        options: {
+            animation: false,
+            parsing: false,
+            scales: {
+                x: {
+                    type: 'linear',
+                    ticks: {
+                        callback: function(value) {
+                            const d = new Date(value * 1000);
+                            return d.toLocaleTimeString();
+                        }
+                    }
+                },
+                y: {
+                    beginAtZero: false,
+                    min: 40,
+                    max: 120,
+                    title: { display: true, text: 'BPM' }
+                }
+            },
+            plugins: {
+                annotation: { annotations: {} }
+            }
+        }
+    });
+
+    // ----- Gaze canvas setup -----
+    const gazeCanvas = document.getElementById('gazeCanvas');
+    const gctx = gazeCanvas.getContext('2d');
+    let smoothX = 0.5, smoothY = 0.5;
+    const smoothingFactor = 0.3;
+
+    const trailLength = 15;
+    let trailPositions = [];
+    for (let i = 0; i < trailLength; i++) {
+        trailPositions.push({ x: smoothX, y: smoothY });
+    }
+
+    // ----- Chart window parameters -----
+    const gsrWindow = 60;    // seconds of history for GSR
+    const hrWindow = 30;     // shorter history for HR so it doesn’t push gaze down
+    const maxPoints = 3600;
+
+    function updateChartWindows() {
+        // GSR window
+        if (gsrChart.data.datasets[0].data.length > 0) {
+            const now = gsrChart.data.datasets[0].data[gsrChart.data.datasets[0].data.length - 1].x;
+            gsrChart.options.scales.x.min = now - gsrWindow;
+            gsrChart.options.scales.x.max = now;
+        }
+        // HR window
+        if (hrChart.data.datasets[0].data.length > 0) {
+            const now = hrChart.data.datasets[0].data[hrChart.data.datasets[0].data.length - 1].x;
+            hrChart.options.scales.x.min = now - hrWindow;
+            hrChart.options.scales.x.max = now;
+        }
+        // Remove old annotations from both charts
+        for (let id in gsrChart.options.plugins.annotation.annotations) {
+            const ann = gsrChart.options.plugins.annotation.annotations[id];
+            if (ann.xMin < gsrChart.options.scales.x.min) {
+                delete gsrChart.options.plugins.annotation.annotations[id];
+            }
+        }
+        for (let id in hrChart.options.plugins.annotation.annotations) {
+            const ann = hrChart.options.plugins.annotation.annotations[id];
+            if (ann.xMin < hrChart.options.scales.x.min) {
+                delete hrChart.options.plugins.annotation.annotations[id];
+            }
+        }
+        gsrChart.update('none');
+        hrChart.update('none');
+    }
+
+    // ----- Continuous gaze drawing loop -----
+    function drawLoop() {
+        gctx.clearRect(0, 0, gazeCanvas.width, gazeCanvas.height);
+        // Draw trail
+        for (let i = 0; i < trailPositions.length; i++) {
+            const age = i;
+            const opacity = 0.6 * (1 - age / trailLength) + 0.1;
+            const pos = trailPositions[i];
+            gctx.beginPath();
+            gctx.arc(pos.x * gazeCanvas.width, pos.y * gazeCanvas.height, 5, 0, Math.PI * 2);
+            gctx.fillStyle = `rgba(255, 0, 0, ${opacity})`;
+            gctx.fill();
+        }
+        // Main dot
+        gctx.beginPath();
+        gctx.arc(smoothX * gazeCanvas.width, smoothY * gazeCanvas.height, 10, 0, Math.PI * 2);
+        gctx.fillStyle = "rgba(255, 0, 0, 0.9)";
+        gctx.fill();
+        requestAnimationFrame(drawLoop);
+    }
+    drawLoop();
+
+    // ----- WebSocket to Python hub -----
+    const ws = new WebSocket("ws://localhost:9100");
+
+    ws.onopen = () => console.log("Connected to Python hub");
+    ws.onclose = () => console.log("Disconnected from hub");
+    ws.onerror = (e) => console.error("WebSocket error", e);
+
+    ws.onmessage = (msg) => {
+        const p = JSON.parse(msg.data);
+        console.log("Received packet:", p);
+
+        if (p.type === "biosignal") {
+            const ts = p.data.ts;
+            const gsr = p.data.gsr;
+            const hr = p.data.hr;
+
+            // Update GSR dataset
+            if (gsr !== undefined && !isNaN(gsr)) {
+                gsrChart.data.datasets[0].data.push({ x: ts, y: gsr });
+            } else {
+                gsrChart.data.datasets[0].data.push({ x: ts, y: null });
+            }
+            // Update HR dataset
+            if (hr !== undefined && !isNaN(hr)) {
+                hrChart.data.datasets[0].data.push({ x: ts, y: hr });
+            } else {
+                hrChart.data.datasets[0].data.push({ x: ts, y: null });
+            }
+
+            // Trim old data
+            if (gsrChart.data.datasets[0].data.length > maxPoints) {
+                gsrChart.data.datasets[0].data.shift();
+                hrChart.data.datasets[0].data.shift();
+            }
+
+            updateChartWindows();
+        }
+
+        if (p.type === "unity_event") {
+            const id = "evt_" + Math.random();
+            const x = p.data.t;
+            const label = p.data.label || "Unity Event";
+            // Add annotation to both charts
+            gsrChart.options.plugins.annotation.annotations[id] = {
+                type: 'line',
+                xMin: x,
+                xMax: x,
+                borderColor: 'black',
+                borderWidth: 2,
+                label: {
+                    display: true,
+                    content: label,
+                    rotation: -90,
+                    position: 'start'
+                }
+            };
+            hrChart.options.plugins.annotation.annotations[id] = {
+                type: 'line',
+                xMin: x,
+                xMax: x,
+                borderColor: 'black',
+                borderWidth: 2,
+                label: {
+                    display: true,
+                    content: label,
+                    rotation: -90,
+                    position: 'start'
+                }
+            };
+            updateChartWindows();
+        }
+
+        if (p.type === "gaze") {
+            const left = p.data.left;
+            if (left && !isNaN(left.x) && !isNaN(left.y)) {
+                smoothX = smoothX * (1 - smoothingFactor) + left.x * smoothingFactor;
+                smoothY = smoothY * (1 - smoothingFactor) + left.y * smoothingFactor;
+                trailPositions.unshift({ x: smoothX, y: smoothY });
+                if (trailPositions.length > trailLength) trailPositions.pop();
+            } else {
+                console.warn("Invalid gaze coordinates:", left);
+            }
+        }
+    };
+
+    // Fallback periodic window update
+    setInterval(updateChartWindows, 200);
+
+    // ----- Dark mode toggle -----
+    const darkToggle = document.getElementById('darkToggle');
+    function updateTheme(checked) {
+        document.body.classList.toggle('dark', checked);
+        localStorage.setItem('darkMode', checked ? '1' : '0');
+    }
+    let saved = localStorage.getItem('darkMode');
+    if (saved === null) {
+        saved = '1';
+        localStorage.setItem('darkMode', '1');
+    }
+    if (saved === '1') {
+        darkToggle.checked = true;
+        updateTheme(true);
+    }
+    darkToggle.addEventListener('change', () => {
+        updateTheme(darkToggle.checked);
+    });
+});
+</script>
+</body>
+</html>

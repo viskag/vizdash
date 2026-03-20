@@ -158,7 +158,18 @@ const chart = new Chart(ctx, {
     options: {
         animation: false,
         parsing: false,
-        scales: { x: { type: 'linear' } },
+        scales: {
+            x: {
+                type: 'linear',
+                ticks: {
+                    callback: function(value) {
+                        // value is epoch seconds; convert to local time string
+                        const d = new Date(value * 1000);
+                        return d.toLocaleTimeString();
+                    }
+                }
+            }
+        },
         plugins: {
             annotation: { annotations: {} }
         }

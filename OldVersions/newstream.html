@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <script src="https://cdn.jsdelivr.net/npm/webrtc-adapter@8.2.3/out/adapter.js"></script>
+</head>
+<body style="margin:0; background:#000;">
+    <!-- Video + Gaze overlay container -->
+    <div style="position: relative; width: 100vw; height: 100vh; background: #000;">
+        <video id="gameplayVideo" autoplay playsinline muted style="position: absolute; top:0; left:0; width:100%; height:100%; object-fit:contain; z-index:1;"></video>
+        <canvas id="gazeCanvas" width="500" height="300" style="position: absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:2;"></canvas>
+    </div>
+
+    <script>
+        // --- WebRTC Video (from your working code) ---
+        const video = document.getElementById('gameplayVideo');
+        const streamId = 'unity';
+        const whepUrl = `http://localhost:8889/${streamId}/whep`;
+
+        const pc = new RTCPeerConnection({
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        });
+
+        pc.ontrack = (event) => {
+            video.srcObject = event.streams[0];
+        };
+
+        pc.addTransceiver('video', { direction: 'recvonly' });
+        pc.addTransceiver('audio', { direction: 'recvonly' });
+
+        pc.createOffer()
+            .then(offer => pc.setLocalDescription(offer))
+            .then(() => fetch(whepUrl, {
+                method: 'POST',
+                body: pc.localDescription.sdp,
+                headers: { 'Content-Type': 'application/sdp' }
+            }))
+            .then(res => res.text())
+            .then(answer => pc.setRemoteDescription({ type: 'answer', sdp: answer }))
+            .catch(console.error);
+
+        // --- Gaze Overlay (from your original dashboard) ---
+        const gazeCanvas = document.getElementById('gazeCanvas');
+        const gctx = gazeCanvas.getContext('2d');
+        let smoothX = 0.5, smoothY = 0.5;
+        const smoothingFactor = 0.3;
+        const trailLength = 15;
+        let trailPositions = [];
+        for (let i = 0; i < trailLength; i++) {
+            trailPositions.push({ x: smoothX, y: smoothY });
+        }
+
+        // Continuous drawing loop
+        function drawLoop() {
+            gctx.clearRect(0, 0, gazeCanvas.width, gazeCanvas.height);
+            // Draw trail
+            for (let i = 0; i < trailPositions.length; i++) {
+                const opacity = 0.6 * (1 - i / trailLength) + 0.1;
+                const pos = trailPositions[i];
+                gctx.beginPath();
+                gctx.arc(pos.x * gazeCanvas.width, pos.y * gazeCanvas.height, 5, 0, Math.PI * 2);
+                gctx.fillStyle = `rgba(255, 0, 0, ${opacity})`;
+                gctx.fill();
+            }
+            // Main dot
+            gctx.beginPath();
+            gctx.arc(smoothX * gazeCanvas.width, smoothY * gazeCanvas.height, 10, 0, Math.PI * 2);
+            gctx.fillStyle = "rgba(255, 0, 0, 0.9)";
+            gctx.fill();
+            requestAnimationFrame(drawLoop);
+        }
+        drawLoop();
+
+        // WebSocket connection to Python hub (gaze data)
+        const ws = new WebSocket("ws://localhost:9100");
+        ws.onopen = () => console.log("Connected to Python hub");
+        ws.onclose = () => console.log("Disconnected");
+        ws.onerror = (e) => console.error("WebSocket error", e);
+        ws.onmessage = (msg) => {
+            const p = JSON.parse(msg.data);
+            if (p.type === "gaze") {
+                const left = p.data.left;
+                if (left && !isNaN(left.x) && !isNaN(left.y)) {
+                    smoothX = smoothX * (1 - smoothingFactor) + left.x * smoothingFactor;
+                    smoothY = smoothY * (1 - smoothingFactor) + left.y * smoothingFactor;
+                    trailPositions.unshift({ x: smoothX, y: smoothY });
+                    if (trailPositions.length > trailLength) trailPositions.pop();
+                } else {
+                    console.warn("Invalid gaze coordinates:", left);
+                }
+            }
+        };
+    </script>
+</body>
+</html>
