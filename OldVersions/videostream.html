@@ -93,7 +93,7 @@
 
 
             <div class="gaze-wrap">
-                <h2>Eye Gaze Tracker + Gameplay</h2>
+                <h2>eyegazetracker + Gameplay</h2>
                 <div style="position: relative; width: 100%; aspect-ratio: 16/9; background: #000;">
                     <video id="gameplayVideo" autoplay playsinline muted style="position: absolute; top:0; left:0; width:100%; height:100%; object-fit:contain; z-index:1;"></video>
                     <canvas id="gazeCanvas" width="500" height="300" style="position: absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:2;"></canvas>
@@ -137,7 +137,98 @@
             .then(res => res.text())
             .then(answer => pc.setRemoteDescription({ type: 'answer', sdp: answer }))
             .catch(console.error);
+        
 
+        
+
+        // -----------------------------
+// CANVAS SETUP
+// -----------------------------
+const canvas = document.getElementById('gazeCanvas');
+const ctx = canvas.getContext('2d');
+
+function resizeCanvas() {
+    const rect = video.getBoundingClientRect();
+    canvas.width = rect.width;
+    canvas.height = rect.height;
+}
+
+video.addEventListener('loadedmetadata', resizeCanvas);
+window.addEventListener('resize', resizeCanvas);
+
+
+// -----------------------------
+// GAZE STATE
+// -----------------------------
+let smoothX = 0.5;
+let smoothY = 0.5;
+const smoothingFactor = 0.3;
+
+// trail (optional but nice)
+const trailLength = 15;
+let trail = Array.from({ length: trailLength }, () => ({ x: 0.5, y: 0.5 }));
+
+
+// -----------------------------
+// DRAW LOOP
+// -----------------------------
+function drawLoop() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    // trail
+    for (let i = 0; i < trail.length; i++) {
+        const t = trail[i];
+        const alpha = 0.6 * (1 - i / trail.length);
+
+        ctx.beginPath();
+        ctx.arc(t.x * canvas.width, t.y * canvas.height, 5, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(255,0,0,${alpha})`;
+        ctx.fill();
+    }
+
+    // main dot
+    ctx.beginPath();
+    ctx.arc(
+        smoothX * canvas.width,
+        smoothY * canvas.height,
+        10,
+        0,
+        Math.PI * 2
+    );
+    ctx.fillStyle = "red";
+    ctx.fill();
+
+    requestAnimationFrame(drawLoop);
+}
+drawLoop();
+
+
+// -----------------------------
+// WEBSOCKET (YOUR HUB)
+// -----------------------------
+const ws = new WebSocket("ws://localhost:9100");
+
+ws.onopen = () => console.log("WS connected");
+ws.onclose = () => console.log("WS closed");
+ws.onerror = (e) => console.error("WS error", e);
+
+ws.onmessage = (msg) => {
+    const p = JSON.parse(msg.data);
+
+    if (p.type === "gaze") {
+        const left = p.data.left;
+
+        if (left && !isNaN(left.x) && !isNaN(left.y)) {
+            // smoothing
+            smoothX = smoothX * (1 - smoothingFactor) + left.x * smoothingFactor;
+            smoothY = smoothY * (1 - smoothingFactor) + left.y * smoothingFactor;
+
+            // update trail
+            trail.unshift({ x: smoothX, y: smoothY });
+            if (trail.length > trailLength) trail.pop();
+        }
+    }
+};
 
     </script>
 </body>
